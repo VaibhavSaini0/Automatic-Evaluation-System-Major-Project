@@ -1,4 +1,4 @@
-# AES (MarkSmith) — Automatic AI Evaluation System
+# AES  — Automatic AI Evaluation System
 
 An AI-powered academic evaluation platform that automatically checks student answer sheets against an answer key, generates per-question marks, detailed feedback, analytics, and downloadable PDF reports.
 
