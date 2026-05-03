@@ -1,0 +1,103 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+    margin: 0;
+    font-family: "Inter", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
+}
+
+.font-mono {
+    font-family: "JetBrains Mono", monospace;
+}
+
+/* Radial glow used on landing + auth pages */
+.bg-radial-glow {
+    background:
+        radial-gradient(
+            ellipse 70% 60% at 50% 45%,
+            hsl(173 80% 22% / 0.35) 0%,
+            transparent 70%
+        ),
+        hsl(var(--background));
+}
+
+.teal-glow {
+    box-shadow: 0 0 30px hsl(173 80% 40% / 0.35);
+}
+.teal-glow-sm {
+    box-shadow: 0 0 14px hsl(173 80% 40% / 0.35);
+}
+
+.gradient-text {
+    background: linear-gradient(90deg, hsl(173 80% 55%) 0%, hsl(173 80% 45%) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+.btn-primary {
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    transition: all 200ms ease;
+}
+.btn-primary:hover {
+    background: hsl(173 80% 38%);
+    box-shadow: 0 0 22px hsl(173 80% 40% / 0.45);
+}
+
+.input-dark {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    color: hsl(var(--foreground));
+    transition: all 180ms ease;
+}
+.input-dark:focus {
+    border-color: hsl(var(--primary));
+    box-shadow: 0 0 0 3px hsl(173 80% 40% / 0.25);
+    outline: none;
+}
+
+@layer base {
+    :root {
+        /* Dark-by-default — the whole product is dark */
+        --background: 180 10% 6%;
+        --foreground: 180 10% 96%;
+        --card: 180 10% 9%;
+        --card-foreground: 180 10% 96%;
+        --popover: 180 10% 9%;
+        --popover-foreground: 180 10% 96%;
+        --primary: 173 80% 42%;
+        --primary-foreground: 180 10% 6%;
+        --secondary: 180 10% 14%;
+        --secondary-foreground: 180 10% 96%;
+        --muted: 180 10% 14%;
+        --muted-foreground: 180 8% 62%;
+        --accent: 173 80% 42%;
+        --accent-foreground: 180 10% 6%;
+        --destructive: 0 72% 52%;
+        --destructive-foreground: 0 0% 98%;
+        --border: 180 10% 18%;
+        --input: 180 10% 18%;
+        --ring: 173 80% 42%;
+        --radius: 0.75rem;
+        --chart-1: 173 80% 42%;
+        --chart-2: 145 60% 45%;
+        --chart-3: 38 92% 55%;
+        --chart-4: 210 90% 60%;
+        --chart-5: 0 72% 52%;
+    }
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+    body {
+        @apply bg-background text-foreground;
+    }
+}
