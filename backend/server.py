@@ -20,9 +20,13 @@ from google import genai
 from google.genai import types
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, HRFlowable
+)
+from reportlab.graphics.shapes import Drawing, Rect, String
+
 from reportlab.lib.units import mm
 from reportlab.lib import colors
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image as RLImage
 from reportlab.graphics.shapes import Drawing, Rect, String, Circle
 from reportlab.graphics import renderPDF
 import qrcode
@@ -611,228 +615,443 @@ def _qr_image(data: str, size: float = 22 * mm):
     bio.seek(0)
     return RLImage(bio, width=size, height=size)
 
+# ── Palette ────────────────────────────────────────────────────────────────────
+C_TEAL       = '#0d9488'
+C_TEAL_LIGHT = '#ecfdf5'
+C_TEAL_BORDER= '#a7f3d0'
+C_TEAL_TEXT  = '#065f46'
+C_AMBER      = '#f59e0b'
+C_AMBER_BG   = '#fffbeb'
+C_RED        = '#ef4444'
+C_GREEN_TXT  = '#059669'
+C_RED_TXT    = '#dc2626'
+C_INK        = '#0f172a'   # near-black for headings
+C_BODY       = '#111827'   # body text
+C_MUTED      = '#64748b'   # labels, secondary
+C_FAINT      = '#94a3b8'   # very muted, footer
+C_RULE       = '#e2e8f0'   # hairline separators
+C_SURFACE    = '#f8fafc'   # table alt-row, meta bg
+C_WARN_MID   = '#fbbf24'   # amber bar
 
+GRADE_COLOR = {
+    'A+': C_TEAL, 'A': C_TEAL, 'B+': C_TEAL, 'B': C_AMBER,
+    'C':  C_AMBER, 'D': C_RED, 'F': C_RED,
+}
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+def grade_letter(pct: float) -> str:
+    if pct >= 90: return 'A+'
+    if pct >= 80: return 'A'
+    if pct >= 70: return 'B+'
+    if pct >= 60: return 'B'
+    if pct >= 50: return 'C'
+    if pct >= 35: return 'D'
+    return 'F'
+
+def _initials(name: str) -> str:
+    parts = (name or '?').split()
+    return (parts[0][0] + (parts[-1][0] if len(parts) > 1 else '')).upper()
+
+def _slim_bar(pct: float, width_mm: float = 44, height: float = 4) -> Drawing:
+    """Thin progress bar: teal ≥70 %, amber 50–69 %, red <50 %."""
+    w = width_mm * mm
+    fill = C_TEAL if pct >= 70 else (C_WARN_MID if pct >= 50 else C_RED)
+    d = Drawing(w, height)
+    d.add(Rect(0, 0, w, height, rx=2, ry=2,
+               fillColor=colors.HexColor('#e2e8f0'), strokeColor=None))
+    filled = max(4, w * pct / 100)
+    d.add(Rect(0, 0, filled, height, rx=2, ry=2,
+               fillColor=colors.HexColor(fill), strokeColor=None))
+    return d
+
+def _initials_circle(name: str, size: float = 10 * mm) -> Drawing:
+    initials = _initials(name)
+    d = Drawing(size, size)
+    d.add(Rect(0, 0, size, size, rx=size / 2, ry=size / 2,
+               fillColor=colors.HexColor(C_TEAL), strokeColor=None))
+    d.add(String(size / 2, size / 2 - 3.5, initials,
+                 fontName='Helvetica-Bold', fontSize=9,
+                 fillColor=colors.white, textAnchor='middle'))
+    return d
+
+def _qr_stub(size: float = 18 * mm) -> Drawing:
+    """Simple placeholder QR-like square."""
+    d = Drawing(size, size)
+    d.add(Rect(0, 0, size, size, rx=2, ry=2,
+               fillColor=colors.HexColor('#f1f5f9'),
+               strokeColor=colors.HexColor(C_RULE), strokeWidth=0.5))
+    cell = size / 6
+    pattern = [
+        (0,5),(1,5),(2,5),(0,4),(2,4),(0,3),(1,3),(2,3),
+        (4,5),(5,5),(4,4),(4,3),(5,3),(3,1),(4,1),(3,0),(5,0),
+        (0,2),(0,1),(0,0),(1,0),(2,0),(1,2),
+    ]
+    for cx, cy in pattern:
+        d.add(Rect(cx * cell + 1, cy * cell + 1,
+                   cell - 1.5, cell - 1.5, rx=0.5, ry=0.5,
+                   fillColor=colors.HexColor(C_INK), strokeColor=None))
+    return d
+
+# ── Styles ─────────────────────────────────────────────────────────────────────
+def _styles():
+    base = getSampleStyleSheet()
+    def s(name, **kw):
+        return ParagraphStyle(name, parent=base['Normal'], **kw)
+
+    overline = s('overline',
+        fontName='Courier', fontSize=8, leading=10,
+        textColor=colors.HexColor(C_TEAL),
+        spaceAfter=3, spaceBefore=0,
+    )
+    h1 = s('h1',
+        fontName='Helvetica-Bold', fontSize=22, leading=26,
+        textColor=colors.HexColor(C_INK), spaceAfter=2,
+    )
+    subtitle = s('subtitle',
+        fontName='Courier', fontSize=9, leading=11,
+        textColor=colors.HexColor(C_MUTED), spaceAfter=0,
+    )
+    body = s('body',
+        fontName='Helvetica', fontSize=10, leading=14,
+        textColor=colors.HexColor(C_BODY),
+    )
+    small = s('small',
+        fontName='Courier', fontSize=8, leading=10,
+        textColor=colors.HexColor(C_FAINT),
+    )
+    mono = s('mono',
+        fontName='Courier', fontSize=9, leading=12,
+        textColor=colors.HexColor(C_BODY),
+    )
+    muted = s('muted',
+        fontName='Helvetica', fontSize=9, leading=12,
+        textColor=colors.HexColor(C_MUTED),
+    )
+    label = s('label',
+        fontName='Courier', fontSize=7.5, leading=10,
+        textColor=colors.HexColor(C_MUTED), spaceAfter=2,
+    )
+    return dict(overline=overline, h1=h1, subtitle=subtitle, body=body,
+                small=small, mono=mono, muted=muted, label=label)
+
+# ── Main builder ───────────────────────────────────────────────────────────────
 def build_pdf_report(doc: dict) -> bytes:
     buf = io.BytesIO()
-    styles = getSampleStyleSheet()
-    pct = float(doc.get('percentage') or 0)
-    awarded = float(doc.get('total_awarded') or 0)
-    max_m = float(doc.get('total_max') or 0)
-    grade = grade_letter(pct)
+    ST = _styles()
+    body = ST['body']
 
-    h1 = ParagraphStyle('h1', parent=styles['Title'], fontName='Helvetica-Bold',
-                        fontSize=22, leading=26, textColor=colors.HexColor('#0f172a'), spaceAfter=2)
-    subtitle = ParagraphStyle('subtitle', parent=styles['Normal'], fontName='Helvetica',
-                              fontSize=10, leading=12, textColor=colors.HexColor('#64748b'), spaceAfter=4)
-    overline = ParagraphStyle('overline', parent=styles['Normal'], fontName='Helvetica-Bold',
-                              fontSize=8, textColor=colors.HexColor('#0d9488'),
-                              leading=10, spaceAfter=2)
-    body = ParagraphStyle('body', parent=styles['Normal'], fontName='Helvetica',
-                          fontSize=10, leading=14, textColor=colors.HexColor('#111111'))
-    small = ParagraphStyle('small', parent=styles['Normal'], fontName='Helvetica',
-                           fontSize=8, leading=10, textColor=colors.HexColor('#64748b'))
-    score_big = ParagraphStyle('score_big', parent=styles['Normal'], fontName='Helvetica-Bold',
-                               fontSize=36, leading=42, textColor=colors.HexColor(GRADE_COLORS[grade]))
-    pdf = SimpleDocTemplate(buf, pagesize=A4,
-                            leftMargin=18 * mm, rightMargin=18 * mm,
-                            topMargin=16 * mm, bottomMargin=14 * mm)
+    pct      = float(doc.get('percentage') or 0)
+    awarded  = float(doc.get('total_awarded') or 0)
+    max_m    = float(doc.get('total_max') or 0)
+    grade    = grade_letter(pct)
+    g_color  = GRADE_COLOR[grade]
+
+    pdf = SimpleDocTemplate(
+        buf, pagesize=A4,
+        leftMargin=20 * mm, rightMargin=20 * mm,
+        topMargin=14 * mm, bottomMargin=14 * mm,
+    )
     flow = []
 
-    # ---------- HEADER STRIP ----------
+    # ── Top accent bar (drawn via a 1-row table with colored background) ────────
+    accent = Table([['']], colWidths=[170 * mm], rowHeights=[3])
+    accent.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor(C_INK)),
+        ('LINEBELOW',  (0, 0), (-1, -1), 0, colors.white),
+    ]))
+    flow.append(accent)
+    flow.append(Spacer(1, 10))
+
+    # ── Header: initials circle · brand · report id ──────────────────────────
     header = Table(
         [[
             _initials_circle(doc.get('student_name') or doc.get('student_roll_no') or '?'),
-            Paragraph(f"<b>AES</b><br/><font size='7' color='#64748b'>ACADEMIC EVALUATION SYSTEM</font>", body),
+            Table(
+                [[Paragraph('<b>AES</b>', body)],
+                 [Paragraph(
+                     "<font name='Courier' size='7' color='#64748b'>ACADEMIC EVALUATION SYSTEM</font>",
+                     body)]],
+                colWidths=[65 * mm],
+            ),
             '',
-            Paragraph("<para alignment='right'><font size='7' color='#64748b'>REPORT ID</font><br/>"
-                      f"<font name='Courier' size='8'>{str(doc.get('id',''))[:8]}</font></para>", body),
+            Table(
+                [[Paragraph(
+                    "<font name='Courier' size='7' color='#94a3b8'>REPORT ID</font>", body)],
+                 [Paragraph(
+                    f"<font name='Courier' size='9' color='#475569'>"
+                    f"{str(doc.get('id',''))[:8].upper()}</font>", body)]],
+                colWidths=[35 * mm],
+            ),
         ]],
-        colWidths=[16 * mm, 70 * mm, 55 * mm, 30 * mm],
+        colWidths=[13 * mm, 65 * mm, 57 * mm, 35 * mm],
     )
     header.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LINEBELOW', (0, 0), (-1, -1), 1.2, colors.HexColor('#0d9488')),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
+        ('ALIGN',        (3, 0), (3, 0),   'RIGHT'),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('LINEBELOW',    (0, 0), (-1, -1), 0.5, colors.HexColor(C_RULE)),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 10),
     ]))
     flow.append(header)
-    flow.append(Spacer(1, 12))
+    flow.append(Spacer(1, 14))
 
-    # ---------- TITLE ----------
-    flow.append(Paragraph('EVALUATION REPORT', overline))
-    flow.append(Paragraph(doc.get('subject') or 'General', h1))
-    flow.append(Paragraph(str(doc.get('created_at', ''))[:10], subtitle))
+    # ── Hero: subject title + score ──────────────────────────────────────────
+    # Left: overline + big title + date
+    left = Table(
+        [[Paragraph("EVALUATION REPORT", ST['overline'])],
+         [Paragraph(doc.get('subject') or 'General', ST['h1'])],
+         [Paragraph(str(doc.get('created_at', ''))[:10], ST['subtitle'])]],
+        colWidths=[105 * mm],
+    )
+    left.setStyle(TableStyle([
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 2),
+    ]))
+
+    # Right: large score number
+    right = Table(
+        [[Paragraph(
+            f"<font name='Helvetica-Bold' size='40' color='{g_color}'>{awarded:g}</font>"
+            f"<font name='Helvetica' size='16' color='#94a3b8'>/{max_m:g}</font>",
+            body)],
+         [Paragraph(
+            f"<font name='Courier' size='9' color='#64748b'>{pct}%</font>",
+            body)],
+         [Paragraph(
+            f"<font name='Courier' size='9' color='{C_TEAL_TEXT}'> {grade} </font>",
+            ParagraphStyle('pill', parent=body,
+                           backColor=colors.HexColor(C_TEAL_LIGHT),
+                           borderColor=colors.HexColor(C_TEAL_BORDER),
+                           borderWidth=0.5, borderPadding=(2, 6, 2, 6),
+                           borderRadius=10))]],
+        colWidths=[62 * mm],
+    )
+    right.setStyle(TableStyle([
+        ('ALIGN',        (0, 0), (-1, -1), 'RIGHT'),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 2),
+        ('LINEBEFORE',   (0, 0), (0, -1),  0.5, colors.HexColor(C_RULE)),
+        ('LEFTPADDING',  (0, 0), (0, -1),  12),
+    ]))
+
+    hero = Table([[left, right]], colWidths=[105 * mm, 65 * mm])
+    hero.setStyle(TableStyle([
+        ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
+        ('LINEBELOW',    (0, 0), (-1, -1), 0.5, colors.HexColor(C_RULE)),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 14),
+    ]))
+    flow.append(hero)
     flow.append(Spacer(1, 10))
 
-    # ---------- SCORE BANNER ----------
-    score_left = [
-        [Paragraph("<font size='7' color='#64748b'>TOTAL SCORE</font>", body)],
-        [Paragraph(f"<font name='Helvetica-Bold' size='36' color='{GRADE_COLORS[grade]}'>"
-                   f"{awarded:g}</font><font size='16' color='#475569'>/{max_m:g}</font>", body)],
-        [Paragraph(f"<font name='Helvetica' size='10' color='#64748b'>{pct}%</font>", body)],
-    ]
-    score_table = Table(score_left, colWidths=[80 * mm])
-    score_table.setStyle(TableStyle([
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING', (0, 0), (-1, -1), 1),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
-    ]))
-    banner = Table(
-        [[score_table, _score_badge(pct, size=70)]],
-        colWidths=[120 * mm, 54 * mm],
-    )
-    banner.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f0fdfa')),
-        ('BOX', (0, 0), (-1, -1), 1, colors.HexColor('#99f6e4')),
-        ('ROUNDEDCORNERS', [8, 8, 8, 8]),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('ALIGN', (1, 0), (1, 0), 'CENTER'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 16),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 16),
-        ('TOPPADDING', (0, 0), (-1, -1), 16),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 16),
-    ]))
-    flow.append(banner)
-    flow.append(Spacer(1, 14))
+    # ── Meta row ─────────────────────────────────────────────────────────────
+    def meta_cell(label_txt: str, val_txt: str, mono: bool = False) -> Table:
+        fn = 'Courier' if mono else 'Helvetica-Bold'
+        return Table(
+            [[Paragraph(
+                f"<font name='Courier' size='7' color='#94a3b8'>{label_txt}</font>",
+                body)],
+             [Paragraph(
+                f"<font name='{fn}' size='10'>{val_txt}</font>",
+                body)]],
+            colWidths=[38 * mm],
+        )
 
-    # ---------- META ----------
-    meta = [
-        [Paragraph("<font size='7' color='#64748b'>ROLL NO</font>", body),
-         Paragraph("<font size='7' color='#64748b'>STUDENT</font>", body),
-         Paragraph("<font size='7' color='#64748b'>TEACHER</font>", body),
-         Paragraph("<font size='7' color='#64748b'>DATE</font>", body)],
-        [Paragraph(f"<font name='Courier' size='10'><b>{doc.get('student_roll_no','-')}</b></font>", body),
-         Paragraph(f"<font size='10'><b>{doc.get('student_name') or '-'}</b></font>", body),
-         Paragraph(f"<font size='10'>{doc.get('teacher_name') or '-'}</font>", body),
-         Paragraph(f"<font size='10'>{str(doc.get('created_at',''))[:10]}</font>", body)],
-    ]
-    m = Table(meta, colWidths=[38 * mm, 55 * mm, 46 * mm, 35 * mm])
-    m.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LINEBELOW', (0, 0), (-1, 0), 0.4, colors.HexColor('#e2e8f0')),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    meta = Table(
+        [[
+            meta_cell('ROLL NO',  doc.get('student_roll_no') or '—', mono=True),
+            meta_cell('STUDENT',  doc.get('student_name') or '—'),
+            meta_cell('TEACHER',  doc.get('teacher_name') or '—'),
+            meta_cell('DATE',     str(doc.get('created_at', ''))[:10]),
+        ]],
+        colWidths=[38 * mm, 47 * mm, 47 * mm, 38 * mm],
+    )
+    meta.setStyle(TableStyle([
+        ('BACKGROUND',   (0, 0), (-1, -1), colors.HexColor(C_SURFACE)),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 8),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+        ('TOPPADDING',   (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 8),
+        ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
+        ('LINEBELOW',    (0, 0), (-1, -1), 0.5, colors.HexColor(C_RULE)),
     ]))
-    flow.append(m)
+    flow.append(meta)
     flow.append(Spacer(1, 16))
 
-    # ---------- QUESTION-WISE ----------
-    flow.append(Paragraph('QUESTION-WISE MARKS', overline))
-    flow.append(Spacer(1, 4))
-    rows = [['Q', 'MARKS', 'PROGRESS', 'FEEDBACK']]
+    # ── Question-wise table ───────────────────────────────────────────────────
+    flow.append(Paragraph('QUESTION-WISE MARKS', ST['overline']))
+    flow.append(Spacer(1, 6))
+
+    th_style = ParagraphStyle('th', parent=body,
+        fontName='Courier', fontSize=7.5, leading=10,
+        textColor=colors.HexColor(C_MUTED))
+
+    rows = [[
+        Paragraph('Q',        th_style),
+        Paragraph('MARKS',    th_style),
+        Paragraph('PROGRESS', th_style),
+        Paragraph('FEEDBACK', th_style),
+    ]]
     for q in (doc.get('questions') or []):
-        q_max = float(q.get('max_marks') or 0)
-        q_got = float(q.get('awarded_marks') or 0)
-        q_pct = (q_got / q_max * 100) if q_max > 0 else 0
+        q_max  = float(q.get('max_marks') or 0)
+        q_got  = float(q.get('awarded_marks') or 0)
+        q_pct  = (q_got / q_max * 100) if q_max > 0 else 0
+        q_gr   = grade_letter(q_pct)
+        q_col  = GRADE_COLOR[q_gr]
         rows.append([
-            Paragraph(f"<b>{q.get('question_no','')}</b>", body),
-            Paragraph(f"<font color='{GRADE_COLORS[grade_letter(q_pct)]}'><b>{q_got:g}</b></font>"
-                      f"<font color='#94a3b8'>/{q_max:g}</font>", body),
-            _progress_bar(q_pct, width=40 * mm, height=6),
-            Paragraph(q.get('feedback', ''), body),
+            Paragraph(
+                f"<font name='Courier' size='9' color='#64748b'>"
+                f"{q.get('question_no','')}</font>", body),
+            Paragraph(
+                f"<font name='Helvetica-Bold' size='10' color='{q_col}'>{q_got:g}</font>"
+                f"<font size='9' color='#94a3b8'>/{q_max:g}</font>", body),
+            _slim_bar(q_pct, width_mm=44),
+            Paragraph(
+                f"<font size='9' color='#475569'>{q.get('feedback','')}</font>",
+                body),
         ])
-    qt = Table(rows, colWidths=[12 * mm, 20 * mm, 45 * mm, 97 * mm], repeatRows=1)
+
+    qt = Table(rows, colWidths=[14 * mm, 22 * mm, 48 * mm, 86 * mm], repeatRows=1)
     qt.setStyle(TableStyle([
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#64748b')),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f8fafc')),
-        ('LINEBELOW', (0, 0), (-1, 0), 0.8, colors.HexColor('#cbd5e1')),
-        ('LINEBELOW', (0, 1), (-1, -1), 0.4, colors.HexColor('#e2e8f0')),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 6),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-        ('TOPPADDING', (0, 0), (-1, -1), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('LINEBELOW',    (0, 0), (-1, 0),  0.8, colors.HexColor(C_RULE)),
+        ('LINEBELOW',    (0, 1), (-1, -1), 0.4, colors.HexColor(C_RULE)),
+        ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 4),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING',   (0, 0), (-1, -1), 8),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 8),
+        ('BACKGROUND',   (0, 0), (-1, 0),  colors.HexColor(C_SURFACE)),
     ]))
     flow.append(qt)
-    flow.append(Spacer(1, 16))
+    flow.append(Spacer(1, 18))
 
-    # ---------- OVERALL FEEDBACK ----------
-    flow.append(Paragraph('OVERALL FEEDBACK', overline))
-    flow.append(Spacer(1, 4))
-    feedback_table = Table(
-        [[Paragraph(doc.get('overall_feedback') or '-', body)]],
-        colWidths=[174 * mm],
+    # ── Overall feedback ──────────────────────────────────────────────────────
+    flow.append(Paragraph('OVERALL FEEDBACK', ST['overline']))
+    flow.append(Spacer(1, 6))
+    fb = Table(
+        [[Paragraph(doc.get('overall_feedback') or '—', body)]],
+        colWidths=[170 * mm],
     )
-    feedback_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#fefce8')),
-        ('LINEBEFORE', (0, 0), (0, -1), 3, colors.HexColor('#f59e0b')),
-        ('LEFTPADDING', (0, 0), (-1, -1), 12),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        ('TOPPADDING', (0, 0), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+    fb.setStyle(TableStyle([
+        ('BACKGROUND',   (0, 0), (-1, -1), colors.HexColor(C_AMBER_BG)),
+        ('LINEBEFORE',   (0, 0), (0, -1),  2.5, colors.HexColor(C_AMBER)),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 14),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 14),
+        ('TOPPADDING',   (0, 0), (-1, -1), 12),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 12),
     ]))
-    flow.append(feedback_table)
-    flow.append(Spacer(1, 14))
+    flow.append(fb)
+    flow.append(Spacer(1, 18))
 
-    # ---------- STRENGTHS / WEAKNESSES ----------
-    left_cells = [[Paragraph("<b><font color='#059669'>STRENGTHS</font></b>", body)]]
-    for s in (doc.get('strengths') or []):
-        left_cells.append([Paragraph(f"<font color='#059669'>✓</font>  {s}", body)])
-    if not (doc.get('strengths') or []):
-        left_cells.append([Paragraph("<font color='#94a3b8'>—</font>", body)])
+    # ── Strengths / Weaknesses ────────────────────────────────────────────────
+    def _sw_col(title: str, items: list, col_hex: str, dot: str) -> Table:
+        rows_inner = [[
+            Paragraph(
+                f"<font name='Courier' size='8' color='{col_hex}'>{title}</font>",
+                body)
+        ]]
+        if items:
+            for item in items:
+                rows_inner.append([
+                    Paragraph(
+                        f"<font color='{col_hex}'>{dot}</font>"
+                        f"  <font size='9' color='#374151'>{item}</font>",
+                        body)
+                ])
+        else:
+            rows_inner.append([Paragraph("<font color='#94a3b8'>—</font>", body)])
+        t = Table(rows_inner, colWidths=[78 * mm])
+        t.setStyle(TableStyle([
+            ('LEFTPADDING',  (0, 0), (-1, -1), 12),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+            ('TOPPADDING',   (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING',(0, 0), (-1, -1), 3),
+            ('TOPPADDING',   (0, 0), (-1, 0),  10),
+            ('BOTTOMPADDING',(0, 0), (-1, 0),  8),
+        ]))
+        return t
 
-    right_cells = [[Paragraph("<b><font color='#dc2626'>AREAS TO IMPROVE</font></b>", body)]]
-    for w in (doc.get('weaknesses') or []):
-        right_cells.append([Paragraph(f"<font color='#dc2626'>•</font>  {w}", body)])
-    if not (doc.get('weaknesses') or []):
-        right_cells.append([Paragraph("<font color='#94a3b8'>—</font>", body)])
+    str_col = _sw_col('STRENGTHS',       doc.get('strengths') or [], C_GREEN_TXT, '✓')
+    wk_col  = _sw_col('AREAS TO IMPROVE', doc.get('weaknesses') or [], C_RED_TXT,  '•')
 
-    # pad to equal rows
-    while len(left_cells) < len(right_cells):
-        left_cells.append([''])
-    while len(right_cells) < len(left_cells):
-        right_cells.append([''])
-
-    sw = Table(
-        [[Table(left_cells, colWidths=[82 * mm]), Table(right_cells, colWidths=[82 * mm])]],
-        colWidths=[87 * mm, 87 * mm],
-    )
+    sw = Table([[str_col, wk_col]], colWidths=[85 * mm, 85 * mm])
     sw.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('BOX', (0, 0), (0, 0), 0.6, colors.HexColor('#d1fae5')),
-        ('BOX', (1, 0), (1, 0), 0.6, colors.HexColor('#fee2e2')),
-        ('BACKGROUND', (0, 0), (0, 0), colors.HexColor('#ecfdf5')),
-        ('BACKGROUND', (1, 0), (1, 0), colors.HexColor('#fef2f2')),
-        ('LEFTPADDING', (0, 0), (-1, -1), 12),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        ('TOPPADDING', (0, 0), (-1, -1), 10),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 10),
+        ('VALIGN',       (0, 0), (-1, -1), 'TOP'),
+        ('BOX',          (0, 0), (0, 0),   0.5, colors.HexColor('#a7f3d0')),
+        ('BOX',          (1, 0), (1, 0),   0.5, colors.HexColor('#fecaca')),
+        ('BACKGROUND',   (0, 0), (0, 0),   colors.HexColor('#f0fdf4')),
+        ('BACKGROUND',   (1, 0), (1, 0),   colors.HexColor('#fef2f2')),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
     ]))
     flow.append(sw)
-    flow.append(Spacer(1, 20))
+    flow.append(Spacer(1, 22))
 
-    # ---------- FOOTER (signature + QR) ----------
-    qr_data = f"AES://evaluation/{doc.get('id','')}"
+    # ── Footer ────────────────────────────────────────────────────────────────
+    flow.append(HRFlowable(width='100%', thickness=0.5,
+                           color=colors.HexColor(C_RULE), spaceAfter=10))
     try:
-        qr_img = _qr_image(qr_data, size=22 * mm)
+        from reportlab.graphics.barcode.qr import QrCodeWidget
+        from reportlab.graphics.shapes import Drawing as QRD
+        qr_data = f"AES://evaluation/{doc.get('id', '')}"
+        qrw = QrCodeWidget(qr_data)
+        bounds = qrw.getBounds()
+        qr_w = bounds[2] - bounds[0]
+        qr_h = bounds[3] - bounds[1]
+        scale = 18 * mm / max(qr_w, qr_h)
+        d = QRD(18 * mm, 18 * mm)
+        from reportlab.graphics.shapes import Group, Transform
+        g = Group(qrw)
+        g.transform = (scale, 0, 0, scale, 0, 0)
+        d.add(g)
+        qr_el = d
     except Exception:
-        qr_img = ''
-    sig_line = Table(
-        [[Paragraph("<font size='7' color='#94a3b8'>TEACHER SIGNATURE</font><br/>"
-                    f"<font size='9'>{doc.get('teacher_name') or '—'}</font>", body),
-          '',
-          qr_img]],
-        colWidths=[90 * mm, 50 * mm, 34 * mm],
-    )
-    sig_line.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'BOTTOM'),
-        ('ALIGN', (2, 0), (2, 0), 'RIGHT'),
-        ('LINEABOVE', (0, 0), (0, 0), 0.4, colors.HexColor('#0f172a')),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-    ]))
-    flow.append(sig_line)
+        qr_el = _qr_stub(18 * mm)
 
-    flow.append(Spacer(1, 6))
-    flow.append(Paragraph(
-        "<font size='7' color='#94a3b8'>Generated by AES • "
-        "Academic Evaluation System • Powered by AI</font>",
-        small))
+    sig_table = Table(
+        [[
+            Table(
+                [[Paragraph(
+                    "<font name='Courier' size='7' color='#94a3b8'>TEACHER SIGNATURE</font>",
+                    body)],
+                 [Paragraph(
+                    f"<font size='10'>{doc.get('teacher_name') or '—'}</font>",
+                    body)]],
+                colWidths=[85 * mm],
+            ),
+            Paragraph(
+                "<font name='Courier' size='7' color='#94a3b8'>"
+                "Generated by AES · Academic Evaluation System · Powered by AI"
+                "</font>",
+                ParagraphStyle('footer_center', parent=body, alignment=1)),
+            qr_el,
+        ]],
+        colWidths=[70 * mm, 76 * mm, 24 * mm],
+    )
+    sig_table.setStyle(TableStyle([
+        ('VALIGN',       (0, 0), (-1, -1), 'BOTTOM'),
+        ('ALIGN',        (2, 0), (2, 0),   'RIGHT'),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('BOTTOMPADDING',(0, 0), (-1, -1), 0),
+        ('LINEABOVE',    (0, 0), (0, 0),   0.5, colors.HexColor(C_INK)),
+        ('TOPPADDING',   (0, 0), (0, 0),   6),
+    ]))
+    flow.append(sig_table)
 
     pdf.build(flow)
     return buf.getvalue()
-
 
 @api_router.get('/evaluations/{eval_id}/pdf')
 async def download_report(eval_id: str, user=Depends(get_current_user)):
