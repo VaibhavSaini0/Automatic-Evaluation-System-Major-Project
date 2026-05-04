@@ -214,10 +214,12 @@ async def list_students(user=Depends(require_teacher)):
 
 
 # ---------- Evaluation ----------
-EVAL_SYSTEM_PROMPT_BASE = """You are a rigorous, fair academic examination evaluator. You are given THREE PDF documents in order:
+EVAL_SYSTEM_PROMPT_BASE = """You are a fair and supportive academic examination evaluator. You are given THREE PDF documents in order:
 1. QUESTION PAPER — the exam questions.
 2. ANSWER KEY — model answers with mark allocations.
 3. STUDENT ANSWER SHEET — the student's handwritten or typed answers.
+
+GOAL: Evaluate accurately BUT ensure students receive fair partial credit for any relevant attempt.
 
 STEP 1 (INTERNAL): Segment the student sheet into individual answers by identifying markers like "Q1", "Question 1", "Ans 1", "Sol 1", "1)", etc. Be tolerant of OCR errors in markers.
 
@@ -225,7 +227,16 @@ STEP 2 (INTERNAL): For each question, compare the student's answer against the m
 - semantic_similarity: how close the meaning / concept is to the model answer
 - keyword_match: coverage of key technical terms / formulas / units
 - grammar_score: clarity and grammatical correctness
-- final_correctness: overall correctness weighted by the above (the main grade signal)
+- final_correctness: overall correctness weighted by the above (main grading signal)
+
+IMPORTANT GRADING POLICY:
+- NEVER give 0 marks if the student has written something relevant to the question.
+- If the answer shows even partial understanding or related concepts → award at least 20–30% of marks.
+- If the student writes something loosely related → award minimum grace marks (10–20%).
+- Give benefit of doubt in case of unclear handwriting or OCR errors.
+- Prioritize understanding over exact wording.
+- Penalize only when the answer is completely irrelevant or blank.
+- Encourage step-based marking: even if the final answer is wrong, give marks for correct steps or logic.
 
 STEP 3 (OUTPUT): Award marks out of max_marks by applying the strictness rule below, then produce ONE JSON object — no markdown, no code fences, no prose — with this exact schema:
 {
@@ -250,26 +261,20 @@ STEP 3 (OUTPUT): Award marks out of max_marks by applying the strictness rule be
 }
 
 STRICTNESS: {STRICTNESS_RULE}"""
-
 STRICTNESS_RULES = {
     'lenient': (
-        "Be generous. Award full marks if the core idea is correct, even if wording, "
-        "steps, or units are incomplete. Ignore minor spelling/grammar issues. "
-        "Give partial credit liberally for any relevant work shown."
+        "Be very generous. Always reward any relevant attempt. Even loosely correct answers "
+        "should receive at least 30-50% marks. Focus on intent over accuracy."
     ),
     'balanced': (
-        "Be fair but rigorous. Award partial credit proportional to completeness. "
-        "Deduct for wrong concepts but not for presentation issues. "
-        "Full marks require a correct, reasonably complete answer."
+        "Be fair and student-friendly. Always give minimum marks (20-30%) for partially correct "
+        "or relevant answers. Deduct marks only for clearly incorrect concepts."
     ),
     'strict': (
-        "Be strict, like a board examiner. Deduct for missing steps, wrong units, "
-        "incomplete proofs, unclear reasoning, or spelling errors in technical terms. "
-        "Award full marks only when the answer fully matches the key in substance AND "
-        "in the key steps or justification."
+        "Be academically strict but NOT harsh. Still award minimum 10-20% marks for any relevant "
+        "attempt. Do not give zero unless the answer is completely unrelated or blank."
     ),
 }
-
 
 def extract_json(text: str) -> dict:
     text = text.strip()
