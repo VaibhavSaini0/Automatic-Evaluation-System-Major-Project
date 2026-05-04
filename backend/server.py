@@ -542,78 +542,6 @@ async def delete_evaluation(eval_id: str, user=Depends(require_teacher)):
 
 
 # ---------- PDF Report ----------
-GRADE_COLORS = {
-    'A+': '#059669', 'A': '#10b981', 'B': '#f59e0b',
-    'C': '#f97316', 'D': '#fb923c', 'F': '#ef4444',
-}
-
-
-def grade_letter(pct: float) -> str:
-    if pct >= 90: return 'A+'
-    if pct >= 80: return 'A'
-    if pct >= 70: return 'B'
-    if pct >= 60: return 'C'
-    if pct >= 50: return 'D'
-    return 'F'
-
-
-def initials(name: str) -> str:
-    if not name:
-        return '?'
-    parts = [p for p in name.split() if p]
-    if not parts:
-        return '?'
-    if len(parts) == 1:
-        return parts[0][:2].upper()
-    return (parts[0][0] + parts[-1][0]).upper()
-
-
-def _score_badge(pct: float, size: int = 70) -> Drawing:
-    """Circular badge with grade letter."""
-    d = Drawing(size, size)
-    g = grade_letter(pct)
-    bg = colors.HexColor(GRADE_COLORS[g])
-    d.add(Circle(size / 2, size / 2, size / 2, fillColor=bg, strokeColor=bg))
-    d.add(String(size / 2, size / 2 - 8, g,
-                 fontName='Helvetica-Bold', fontSize=26,
-                 fillColor=colors.white, textAnchor='middle'))
-    return d
-
-
-def _progress_bar(pct: float, width: float = 140, height: float = 6) -> Drawing:
-    """Horizontal progress bar."""
-    d = Drawing(width, height)
-    # background
-    d.add(Rect(0, 0, width, height, fillColor=colors.HexColor('#e5e7eb'),
-               strokeColor=None, rx=height / 2, ry=height / 2))
-    # fill
-    fill_w = max(0, min(width, width * pct / 100))
-    g = grade_letter(pct)
-    d.add(Rect(0, 0, fill_w, height, fillColor=colors.HexColor(GRADE_COLORS[g]),
-               strokeColor=None, rx=height / 2, ry=height / 2))
-    return d
-
-
-def _initials_circle(name: str, size: int = 46) -> Drawing:
-    d = Drawing(size, size)
-    d.add(Circle(size / 2, size / 2, size / 2,
-                 fillColor=colors.HexColor('#0d9488'),
-                 strokeColor=colors.HexColor('#0d9488')))
-    d.add(String(size / 2, size / 2 - 6, initials(name),
-                 fontName='Helvetica-Bold', fontSize=18,
-                 fillColor=colors.white, textAnchor='middle'))
-    return d
-
-
-def _qr_image(data: str, size: float = 22 * mm):
-    qr = qrcode.QRCode(version=1, box_size=4, border=1)
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color='#111111', back_color='white')
-    bio = io.BytesIO()
-    img.save(bio, format='PNG')
-    bio.seek(0)
-    return RLImage(bio, width=size, height=size)
 
 # ── Palette ────────────────────────────────────────────────────────────────────
 C_TEAL       = '#0d9488'
@@ -802,7 +730,7 @@ def build_pdf_report(doc: dict) -> bytes:
         [[Paragraph("EVALUATION REPORT", ST['overline'])],
          [Paragraph(doc.get('subject') or 'General', ST['h1'])],
          [Paragraph(str(doc.get('created_at', ''))[:10], ST['subtitle'])]],
-        colWidths=[105 * mm],
+        colWidths=[110 * mm],
     )
     left.setStyle(TableStyle([
         ('LEFTPADDING',  (0, 0), (-1, -1), 0),
@@ -811,35 +739,38 @@ def build_pdf_report(doc: dict) -> bytes:
         ('BOTTOMPADDING',(0, 0), (-1, -1), 2),
     ]))
 
-    # Right: large score number
+    # Right: score block — each element in its own row so they never overlap
+    score_num_style = ParagraphStyle('score_num', parent=body,
+        fontName='Helvetica-Bold', fontSize=36, leading=42,
+        textColor=colors.HexColor(g_color), alignment=2)
+    score_denom_style = ParagraphStyle('score_denom', parent=body,
+        fontName='Helvetica', fontSize=13, leading=16,
+        textColor=colors.HexColor('#94a3b8'), alignment=2)
+    score_pct_style = ParagraphStyle('score_pct', parent=body,
+        fontName='Courier', fontSize=9, leading=12,
+        textColor=colors.HexColor(C_MUTED), alignment=2)
+    grade_style = ParagraphStyle('grade_pill', parent=body,
+        fontName='Courier', fontSize=9, leading=12,
+        textColor=colors.HexColor(C_TEAL_TEXT), alignment=2)
+
     right = Table(
-        [[Paragraph(
-            f"<font name='Helvetica-Bold' size='40' color='{g_color}'>{awarded:g}</font>"
-            f"<font name='Helvetica' size='16' color='#94a3b8'>/{max_m:g}</font>",
-            body)],
-         [Paragraph(
-            f"<font name='Courier' size='9' color='#64748b'>{pct}%</font>",
-            body)],
-         [Paragraph(
-            f"<font name='Courier' size='9' color='{C_TEAL_TEXT}'> {grade} </font>",
-            ParagraphStyle('pill', parent=body,
-                           backColor=colors.HexColor(C_TEAL_LIGHT),
-                           borderColor=colors.HexColor(C_TEAL_BORDER),
-                           borderWidth=0.5, borderPadding=(2, 6, 2, 6),
-                           borderRadius=10))]],
-        colWidths=[62 * mm],
+        [[Paragraph(f"{awarded:g}", score_num_style)],
+         [Paragraph(f"out of {max_m:g}", score_denom_style)],
+         [Paragraph(f"{pct}%", score_pct_style)],
+         [Paragraph(f"Grade  {grade}", grade_style)],
+        ],
+        colWidths=[56 * mm],
     )
     right.setStyle(TableStyle([
         ('ALIGN',        (0, 0), (-1, -1), 'RIGHT'),
-        ('LEFTPADDING',  (0, 0), (-1, -1), 0),
+        ('LEFTPADDING',  (0, 0), (-1, -1), 12),
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
-        ('TOPPADDING',   (0, 0), (-1, -1), 0),
+        ('TOPPADDING',   (0, 0), (-1, -1), 2),
         ('BOTTOMPADDING',(0, 0), (-1, -1), 2),
-        ('LINEBEFORE',   (0, 0), (0, -1),  0.5, colors.HexColor(C_RULE)),
-        ('LEFTPADDING',  (0, 0), (0, -1),  12),
+        ('LINEBEFORE',   (0, 0), (-1, -1), 0.5, colors.HexColor(C_RULE)),
     ]))
 
-    hero = Table([[left, right]], colWidths=[105 * mm, 65 * mm])
+    hero = Table([[left, right]], colWidths=[110 * mm, 56 * mm])
     hero.setStyle(TableStyle([
         ('VALIGN',       (0, 0), (-1, -1), 'MIDDLE'),
         ('LEFTPADDING',  (0, 0), (-1, -1), 0),
@@ -1000,23 +931,6 @@ def build_pdf_report(doc: dict) -> bytes:
     # ── Footer ────────────────────────────────────────────────────────────────
     flow.append(HRFlowable(width='100%', thickness=0.5,
                            color=colors.HexColor(C_RULE), spaceAfter=10))
-    try:
-        from reportlab.graphics.barcode.qr import QrCodeWidget
-        from reportlab.graphics.shapes import Drawing as QRD
-        qr_data = f"AES://evaluation/{doc.get('id', '')}"
-        qrw = QrCodeWidget(qr_data)
-        bounds = qrw.getBounds()
-        qr_w = bounds[2] - bounds[0]
-        qr_h = bounds[3] - bounds[1]
-        scale = 18 * mm / max(qr_w, qr_h)
-        d = QRD(18 * mm, 18 * mm)
-        from reportlab.graphics.shapes import Group, Transform
-        g = Group(qrw)
-        g.transform = (scale, 0, 0, scale, 0, 0)
-        d.add(g)
-        qr_el = d
-    except Exception:
-        qr_el = _qr_stub(18 * mm)
 
     sig_table = Table(
         [[
@@ -1033,14 +947,12 @@ def build_pdf_report(doc: dict) -> bytes:
                 "<font name='Courier' size='7' color='#94a3b8'>"
                 "Generated by AES · Academic Evaluation System · Powered by AI"
                 "</font>",
-                ParagraphStyle('footer_center', parent=body, alignment=1)),
-            qr_el,
+                ParagraphStyle('footer_center', parent=body, alignment=2)),
         ]],
-        colWidths=[70 * mm, 76 * mm, 24 * mm],
+        colWidths=[85 * mm, 85 * mm],
     )
     sig_table.setStyle(TableStyle([
         ('VALIGN',       (0, 0), (-1, -1), 'BOTTOM'),
-        ('ALIGN',        (2, 0), (2, 0),   'RIGHT'),
         ('LEFTPADDING',  (0, 0), (-1, -1), 0),
         ('RIGHTPADDING', (0, 0), (-1, -1), 0),
         ('TOPPADDING',   (0, 0), (-1, -1), 0),
@@ -1052,7 +964,6 @@ def build_pdf_report(doc: dict) -> bytes:
 
     pdf.build(flow)
     return buf.getvalue()
-
 @api_router.get('/evaluations/{eval_id}/pdf')
 async def download_report(eval_id: str, user=Depends(get_current_user)):
     res = sb.table('evaluations').select('*').eq('id', eval_id).limit(1).execute()
